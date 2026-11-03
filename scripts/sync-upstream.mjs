@@ -29,17 +29,28 @@ const once = (src, needle, what) => {
 
 if (git("status", "--porcelain").trim()) fail("working tree isn't clean; commit or stash first")
 
+// get fetches one upstream file, retrying a dropped connection: the sync
+// runs unattended, and this network drops raw.githubusercontent now and then.
+async function get(url, what) {
+  for (let i = 0; ; i++) {
+    try {
+      const res = await fetch(url, {
+        headers: { "user-agent": "workbuddy-token-sync", accept: "application/vnd.github+json" },
+        signal: AbortSignal.timeout(30000),
+      })
+      if (res.ok) return await res.text()
+      if (res.status < 500 || i >= 2) fail(`can't fetch ${what}: HTTP ${res.status}`)
+    } catch (e) {
+      if (i >= 2) fail(`can't fetch ${what}: ${e?.message ?? e}`)
+    }
+    await new Promise((r) => setTimeout(r, 2000 * (i + 1)))
+  }
+}
+
 // every runtime file the upstream package ships, not a fixed list: a new
 // entry or data file is picked up by itself. README is ours, tests aren't
 // runtime files.
-const listing = await (async () => {
-  const res = await fetch(API, {
-    headers: { "user-agent": "workbuddy-token-sync", accept: "application/vnd.github+json" },
-    signal: AbortSignal.timeout(30000),
-  })
-  if (!res.ok) fail(`can't list the upstream package: HTTP ${res.status}`)
-  return res.json()
-})()
+const listing = JSON.parse(await get(API, "the upstream package listing"))
 if (!Array.isArray(listing)) fail("the upstream package listing isn't a directory")
 const NAMES = listing
   .filter((x) => x.type === "file")
@@ -49,11 +60,7 @@ const NAMES = listing
 if (!NAMES.includes("index.mjs") || !NAMES.includes("package.json")) fail("the upstream package has no index.mjs or package.json")
 
 const up = {}
-for (const n of NAMES) {
-  const res = await fetch(`${UPSTREAM}/${n}`, { signal: AbortSignal.timeout(30000) })
-  if (!res.ok) fail(`can't fetch upstream ${n}: HTTP ${res.status}`)
-  up[n] = await res.text()
-}
+for (const n of NAMES) up[n] = await get(`${UPSTREAM}/${n}`, n)
 const upVersion = JSON.parse(up["package.json"]).version
 const hashes = Object.fromEntries(NAMES.map((n) => [n, sha(up[n])]))
 const statePath = join(root, "upstream.json")
