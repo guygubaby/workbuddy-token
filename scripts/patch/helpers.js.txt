@@ -88,3 +88,185 @@ function importAccounts(input) {
   return { accounts, skipped }
 }
 
+// saveAccounts keeps each imported account as its own magpie sign-in: the
+// first reaches magpie through the sign-in's own save, the rest through the
+// host's client.auth.set. The key is the uid's hash, so importing the same
+// account again updates it instead of adding it twice. OpenCode (no magpie)
+// keeps only the one account its sign-in saves itself.
+async function saveAccounts(site, client, magpie, accounts, skipped) {
+  let saved = 0
+  if (!magpie) return { saved, skipped }
+  for (const a of accounts) {
+    const key = site.id + "#" + createHash("sha1").update(a.uid || a.access).digest("hex").slice(0, 8)
+    try {
+      await client?.auth?.set?.({
+        path: { id: key },
+        body: {
+          type: "oauth",
+          access: a.access,
+          refresh: a.refresh,
+          expires: a.expires,
+          accountId: a.nickname || a.uid || site.name,
+          uid: a.uid,
+          ...(a.domain ? { domain: a.domain } : {}),
+          ...(a.nickname ? { nickname: a.nickname } : {}),
+        },
+      })
+      saved++
+    } catch (e) {
+      skipped.push({ name: a.nickname || a.uid || "account", why: e?.message ?? String(e) })
+    }
+  }
+  return { saved, skipped }
+}
+
+// IMPORT_PAGE is the page the browser sign-in opens: the user picks one or
+// more JSON files and the page posts their text back to the same URL.
+const IMPORT_PAGE = `<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WorkBuddy 账号导入</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.6 system-ui, -apple-system, "PingFang SC", sans-serif; max-width: 560px; margin: 48px auto; padding: 0 20px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { margin: 10px 0; }
+  input[type=file] { display: block; margin: 18px 0; }
+  button { font: inherit; padding: 8px 20px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  pre { white-space: pre-wrap; word-break: break-all; background: rgba(127,127,127,.14); padding: 12px; border-radius: 8px; min-height: 1.6em; }
+</style>
+<h1>WorkBuddy 账号导入</h1>
+<p>选择一个或多个账号 JSON 文件（可多选），然后点“导入”。</p>
+<input type="file" multiple accept=".json,application/json">
+<p><button disabled>导入</button></p>
+<pre></pre>
+<script>
+var input = document.querySelector("input")
+var btn = document.querySelector("button")
+var out = document.querySelector("pre")
+input.onchange = function () {
+  btn.disabled = !input.files.length
+  out.textContent = Array.prototype.map.call(input.files, function (f) { return f.name }).join("\\n")
+}
+btn.onclick = async function () {
+  btn.disabled = true
+  out.textContent = "上传中…"
+  var files = []
+  for (var i = 0; i < input.files.length; i++) files.push({ name: input.files[i].name, text: await input.files[i].text() })
+  try {
+    var r = await fetch(location.href, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ files: files }) })
+    out.textContent = await r.text()
+  } catch (e) {
+    out.textContent = "上传失败：" + e.message
+  }
+}
+</script>
+</html>
+`
+
+// browserImport serves that page for one sign-in and waits for it. magpie's
+// sign-in prompts have no file picker, so the plugin brings its own: a
+// one-time token in the URL, a port that maps into the container
+// (WORKBUDDY_IMPORT_PORT, 3431 by default), and the address the browser
+// reaches it at (WORKBUDDY_IMPORT_HOST, 127.0.0.1 by default).
+async function browserImport(site, client, magpie) {
+  const { createServer } = await import("node:http")
+  const token = randomBytes(24).toString("hex")
+  const wantPort = Number(process.env.WORKBUDDY_IMPORT_PORT || 3431)
+  const publicHost = process.env.WORKBUDDY_IMPORT_HOST || "127.0.0.1"
+  const bind = process.env.WORKBUDDY_IMPORT_BIND || (publicHost === "127.0.0.1" ? "127.0.0.1" : "0.0.0.0")
+  let settle
+  const finished = new Promise((r) => (settle = r))
+  let settled = false
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url ?? "/", "http://localhost")
+    const say = (code, body, type = "text/plain; charset=utf-8") => {
+      res.writeHead(code, { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff" })
+      res.end(body)
+    }
+    if (url.searchParams.get("t") !== token) return say(404, "not found")
+    if (req.method === "GET") return say(200, IMPORT_PAGE, "text/html; charset=utf-8")
+    if (req.method !== "POST") return say(405, "method not allowed")
+    if (settled) return say(409, "this import is already done")
+    let body = ""
+    try {
+      for await (const chunk of req) {
+        body += chunk
+        if (body.length > 4 << 20) throw new Error("the upload is over 4 MB")
+      }
+      const inb = JSON.parse(body)
+      const files = Array.isArray(inb?.files) ? inb.files : [{ name: "pasted", text: String(inb?.text ?? "") }]
+      const accounts = []
+      const skipped = []
+      files.forEach((f, i) => {
+        try {
+          const found = importAccounts(String(f?.text ?? ""))
+          accounts.push(...found.accounts)
+          skipped.push(...found.skipped)
+        } catch (e) {
+          skipped.push({ name: String(f?.name ?? `#${i + 1}`), why: e?.message ?? String(e) })
+        }
+      })
+      if (!accounts.length) throw new Error(`No account imported${skipped[0] ? ` — ${skipped[0].name}: ${skipped[0].why}` : ""}`)
+      const { saved } = await saveAccounts(site, client, magpie, accounts, skipped)
+      const a = accounts[0]
+      settled = true
+      settle({
+        type: "success",
+        access: a.access,
+        refresh: a.refresh,
+        expires: a.expires,
+        accountId: a.nickname || a.uid || site.name,
+        uid: a.uid,
+        ...(a.domain ? { domain: a.domain } : {}),
+        ...(a.nickname ? { nickname: a.nickname } : {}),
+      })
+      const said = `Imported ${saved} account${saved === 1 ? "" : "s"}${skipped.length ? `, skipped ${skipped.length}` : ""}`
+      if (magpie && (accounts.length > 1 || skipped.length)) {
+        try {
+          await client?.tui?.showToast?.({ body: { title: site.name, message: said } })
+        } catch {}
+      }
+      return say(200, `${said}\n\n可以关闭此页面，回到 magpie。`)
+    } catch (e) {
+      settled = true
+      settle({ type: "failed", error: e?.message ?? String(e) })
+      return say(400, `没有导入账号：${e?.message ?? e}`)
+    }
+  })
+  try {
+    await new Promise((resolve, reject) => {
+      const onError = (e) => reject(e)
+      server.once("error", onError)
+      server.listen(wantPort, bind, () => {
+        server.off("error", onError)
+        resolve()
+      })
+    })
+  } catch (e) {
+    server.close()
+    return { type: "failed", error: `Can't listen on ${bind}:${wantPort}: ${e?.message ?? e}` }
+  }
+  const port = server.address().port
+  const timer = setTimeout(() => {
+    if (settled) return
+    settled = true
+    settle({ type: "failed", error: "The import page timed out after 5 minutes" })
+  }, 5 * 60 * 1000)
+  return {
+    url: `http://${publicHost}:${port}/import?t=${token}`,
+    instructions: "Choose one or more account JSON files in the page that opens.",
+    method: "auto",
+    async callback() {
+      try {
+        return await finished
+      } finally {
+        clearTimeout(timer)
+        server.close()
+      }
+    },
+  }
+}
+

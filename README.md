@@ -2,10 +2,15 @@
 
 A fork of
 [`@magpie-community/opencode-workbuddy-auth`](https://github.com/magpie-community/plugins/tree/main/packages/workbuddy)
-that adds one sign-in method: **WorkBuddy AI account file**.
+that adds two sign-in methods:
 
-It imports an account export directly, instead of going through the browser
-sign-in, the desktop app's sign-in, or an API key.
+- **WorkBuddy AI account file** — paste the account JSON, a file path, a
+  folder path, several paths, or a JSON array.
+- **WorkBuddy AI account file (browser)** — a page opens with a real file
+  picker; choose one or more JSON files and they import together.
+
+Both skip the vendor's browser sign-in, the desktop app's sign-in and API
+keys.
 
 ## Install into magpie
 
@@ -33,6 +38,31 @@ If magpie runs in Docker, the path is the one inside the container: copy the
 folder into the mounted config volume (for the Docker setup in this repo's
 notes, `/root/devops/magpie/config/incoming/` on the host is
 `/config/incoming/` in the container).
+
+## Sign in with the browser file picker
+
+1. Open **Providers → WorkBuddy AI → Sign in → WorkBuddy AI account file
+   (browser)**.
+2. A page opens with a file picker. Choose one or more `.json` account files.
+3. Click **导入**. The page says how many were imported; close it and return
+   to magpie.
+
+The page is served by the plugin for that one sign-in only: a random token in
+the URL, closed after the upload or after five minutes. Nothing is typed.
+
+For magpie in Docker, publish the import port and tell the plugin the address
+your browser reaches it at:
+
+```yaml
+ports:
+  - "3431:3431"
+environment:
+  WORKBUDDY_IMPORT_HOST: 203.0.113.10   # the host's public address
+```
+
+`WORKBUDDY_IMPORT_PORT` changes the port (3431). The address is plain HTTP,
+as the rest of the browser UI is; on a public host, allow only the port you
+need and prefer HTTPS in front of it.
 
 ```json
 {
@@ -87,8 +117,12 @@ files, then re-apply the `parseAccountFile` helper and the
 
 - 安装：`magpie plugin add ~/i/workbuddy-token`，或在 magpie 的
   Plugins → Add a plugin 里选择这个目录。
-- 登录：Providers → WorkBuddy AI → Sign in → **WorkBuddy AI account file**，
-  粘贴账号 JSON 内容或文件路径即可。
+- 登录方式一：Providers → WorkBuddy AI → Sign in →
+  **WorkBuddy AI account file**，粘贴账号 JSON 内容或文件路径即可。
+- 登录方式二：**WorkBuddy AI account file (browser)** 会打开一个网页，
+  直接多选本机 JSON 文件，点“导入”即可，不需要输入任何路径。
+- Docker 里的 magpie 要用网页选择文件，需要映射 3431 端口并设置
+  `WORKBUDDY_IMPORT_HOST` 为浏览器访问的服务器地址。
 - 批量导入：填文件夹路径会导入里面所有 `.json`（每个文件一个账号）；
   也可以每行一个路径、用 `;` 分隔多个路径，或粘贴 JSON 数组。无法读取的
   文件会跳过，并在提示里显示数量；重复导入同一个文件夹不会重复添加账号。

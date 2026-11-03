@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const UPSTREAM = "https://raw.githubusercontent.com/magpie-community/plugins/main/packages/workbuddy"
-const NAMES = ["index.mjs", "opencode.mjs", "opencode2.mjs", "package.json"]
+const API = "https://api.github.com/repos/magpie-community/plugins/contents/packages/workbuddy"
 const dry = process.argv.includes("--dry-run")
 const sha = (s) => createHash("sha256").update(s).digest("hex")
 const read = (p) => readFileSync(join(root, p))
@@ -28,6 +28,25 @@ const once = (src, needle, what) => {
 }
 
 if (git("status", "--porcelain").trim()) fail("working tree isn't clean; commit or stash first")
+
+// every runtime file the upstream package ships, not a fixed list: a new
+// entry or data file is picked up by itself. README is ours, tests aren't
+// runtime files.
+const listing = await (async () => {
+  const res = await fetch(API, {
+    headers: { "user-agent": "workbuddy-token-sync", accept: "application/vnd.github+json" },
+    signal: AbortSignal.timeout(30000),
+  })
+  if (!res.ok) fail(`can't list the upstream package: HTTP ${res.status}`)
+  return res.json()
+})()
+if (!Array.isArray(listing)) fail("the upstream package listing isn't a directory")
+const NAMES = listing
+  .filter((x) => x.type === "file")
+  .filter((x) => x.name === "package.json" || (x.name.endsWith(".mjs") && !x.name.endsWith(".test.mjs")))
+  .map((x) => x.name)
+  .sort()
+if (!NAMES.includes("index.mjs") || !NAMES.includes("package.json")) fail("the upstream package has no index.mjs or package.json")
 
 const up = {}
 for (const n of NAMES) {

@@ -134,3 +134,35 @@ test("fails on text that is neither JSON nor a path", async () => {
   assert.equal(r.type, "failed")
   assert.match(r.error, /No account imported/)
 })
+
+test("browser import serves a picker and imports what it posts", async () => {
+  process.env.WORKBUDDY_IMPORT_PORT = "0"
+  process.env.WORKBUDDY_IMPORT_HOST = "127.0.0.1"
+  try {
+    const { client, saved } = mockClient()
+    const hooks = await WorkBuddyAIAuthPlugin({ client, magpie: {} })
+    const m = hooks.auth.methods.find((x) => x.label.endsWith("account file (browser)"))
+    assert.ok(m, "the browser account-file method is there")
+    const r = await m.authorize()
+    assert.equal(r.method, "auto")
+    assert.match(r.url, /^http:\/\/127\.0\.0\.1:\d+\/import\?t=[0-9a-f]+$/)
+    const page = await (await fetch(r.url)).text()
+    assert.match(page, /type="file"/)
+    assert.equal((await fetch(r.url.replace(/t=.*/, "t=nope"))).status, 404)
+    const done = r.callback()
+    const res = await fetch(r.url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ files: [{ name: "a.json", text: JSON.stringify(account) }] }),
+    })
+    assert.equal(res.status, 200)
+    assert.match(await res.text(), /Imported 1 account/)
+    const out = await done
+    assert.equal(out.type, "success")
+    assert.equal(out.accountId, "Test User")
+    assert.equal(saved.length, 1)
+  } finally {
+    delete process.env.WORKBUDDY_IMPORT_PORT
+    delete process.env.WORKBUDDY_IMPORT_HOST
+  }
+})
