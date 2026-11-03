@@ -217,6 +217,17 @@ async function browserImport(site, client, magpie) {
     if (req.method === "GET") return say(200, IMPORT_PAGE, "text/html; charset=utf-8")
     if (req.method !== "POST") return say(405, "method not allowed")
     if (state.settled) return say(409, "this import is already done")
+    // the sign-in finishes only after this answer has left: its callback
+    // closes the server, and closing it under the response cut the socket
+    const answer = (result) => {
+      const done = () => {
+        if (state.settled) return
+        state.settled = true
+        state.settle(result)
+      }
+      res.once("finish", done)
+      res.once("close", done)
+    }
     let body = ""
     try {
       for await (const chunk of req) {
@@ -239,8 +250,7 @@ async function browserImport(site, client, magpie) {
       if (!accounts.length) throw new Error(`No account imported${skipped[0] ? ` — ${skipped[0].name}: ${skipped[0].why}` : ""}`)
       const { saved } = await saveAccounts(site, client, magpie, accounts, skipped)
       const a = accounts[0]
-      state.settled = true
-      state.settle({
+      const result = {
         type: "success",
         access: a.access,
         refresh: a.refresh,
@@ -249,17 +259,17 @@ async function browserImport(site, client, magpie) {
         uid: a.uid,
         ...(a.domain ? { domain: a.domain } : {}),
         ...(a.nickname ? { nickname: a.nickname } : {}),
-      })
+      }
       const said = `Imported ${saved} account${saved === 1 ? "" : "s"}${skipped.length ? `, skipped ${skipped.length}` : ""}`
       if (magpie && (accounts.length > 1 || skipped.length)) {
         try {
           await client?.tui?.showToast?.({ body: { title: site.name, message: said } })
         } catch {}
       }
+      answer(result)
       return say(200, `${said}\n\n可以关闭此页面，回到 magpie。`)
     } catch (e) {
-      state.settled = true
-      state.settle({ type: "failed", error: e?.message ?? String(e) })
+      answer({ type: "failed", error: e?.message ?? String(e) })
       return say(400, `没有导入账号：${e?.message ?? e}`)
     }
   })
