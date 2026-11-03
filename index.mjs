@@ -3653,6 +3653,32 @@ btn.onclick = async function () {
 </html>
 `
 
+// liveImport is the upload page a sign-in left open, if any: a sign-in
+// started again closes it first, so the port is free for the new page even
+// when the first was never finished (magpie cancelled it, or the user just
+// started another).
+let liveImport = null
+
+function stopImport(self, why) {
+  if (!self) return Promise.resolve()
+  if (liveImport === self) liveImport = null
+  if (self.timer) clearTimeout(self.timer)
+  if (why && !self.settled) {
+    self.settled = true
+    self.settle(why)
+  }
+  try {
+    self.server?.closeAllConnections?.()
+  } catch {}
+  return new Promise((resolve) => {
+    try {
+      self.server?.close(() => resolve())
+    } catch {
+      resolve()
+    }
+  })
+}
+
 // browserImport serves that page for one sign-in and waits for it. magpie's
 // sign-in prompts have no file picker, so the plugin brings its own: a
 // one-time token in the URL, a port that maps into the container
@@ -3660,13 +3686,14 @@ btn.onclick = async function () {
 // reaches it at (WORKBUDDY_IMPORT_HOST, 127.0.0.1 by default).
 async function browserImport(site, client, magpie) {
   const { createServer } = await import("node:http")
+  // a page still open from an earlier sign-in holds the port: close it
+  await stopImport(liveImport, { type: "failed", error: "Superseded by a newer account import" })
   const token = randomBytes(24).toString("hex")
   const wantPort = Number(process.env.WORKBUDDY_IMPORT_PORT || 3431)
   const publicHost = process.env.WORKBUDDY_IMPORT_HOST || "127.0.0.1"
   const bind = process.env.WORKBUDDY_IMPORT_BIND || (publicHost === "127.0.0.1" ? "127.0.0.1" : "0.0.0.0")
-  let settle
-  const finished = new Promise((r) => (settle = r))
-  let settled = false
+  const state = { server: null, settled: false, timer: null, settle: null }
+  const finished = new Promise((r) => (state.settle = r))
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost")
     const say = (code, body, type = "text/plain; charset=utf-8") => {
@@ -3676,7 +3703,7 @@ async function browserImport(site, client, magpie) {
     if (url.searchParams.get("t") !== token) return say(404, "not found")
     if (req.method === "GET") return say(200, IMPORT_PAGE, "text/html; charset=utf-8")
     if (req.method !== "POST") return say(405, "method not allowed")
-    if (settled) return say(409, "this import is already done")
+    if (state.settled) return say(409, "this import is already done")
     let body = ""
     try {
       for await (const chunk of req) {
@@ -3699,8 +3726,8 @@ async function browserImport(site, client, magpie) {
       if (!accounts.length) throw new Error(`No account imported${skipped[0] ? ` — ${skipped[0].name}: ${skipped[0].why}` : ""}`)
       const { saved } = await saveAccounts(site, client, magpie, accounts, skipped)
       const a = accounts[0]
-      settled = true
-      settle({
+      state.settled = true
+      state.settle({
         type: "success",
         access: a.access,
         refresh: a.refresh,
@@ -3718,11 +3745,12 @@ async function browserImport(site, client, magpie) {
       }
       return say(200, `${said}\n\n可以关闭此页面，回到 magpie。`)
     } catch (e) {
-      settled = true
-      settle({ type: "failed", error: e?.message ?? String(e) })
+      state.settled = true
+      state.settle({ type: "failed", error: e?.message ?? String(e) })
       return say(400, `没有导入账号：${e?.message ?? e}`)
     }
   })
+  state.server = server
   try {
     await new Promise((resolve, reject) => {
       const onError = (e) => reject(e)
@@ -3733,14 +3761,17 @@ async function browserImport(site, client, magpie) {
       })
     })
   } catch (e) {
-    server.close()
+    await stopImport(state)
     return { type: "failed", error: `Can't listen on ${bind}:${wantPort}: ${e?.message ?? e}` }
   }
+  liveImport = state
   const port = server.address().port
-  const timer = setTimeout(() => {
-    if (settled) return
-    settled = true
-    settle({ type: "failed", error: "The import page timed out after 5 minutes" })
+  state.timer = setTimeout(() => {
+    if (!state.settled) {
+      state.settled = true
+      state.settle({ type: "failed", error: "The import page timed out after 5 minutes" })
+    }
+    stopImport(state)
   }, 5 * 60 * 1000)
   return {
     url: `http://${publicHost}:${port}/import?t=${token}`,
@@ -3750,8 +3781,7 @@ async function browserImport(site, client, magpie) {
       try {
         return await finished
       } finally {
-        clearTimeout(timer)
-        server.close()
+        await stopImport(state)
       }
     },
   }

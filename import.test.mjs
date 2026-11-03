@@ -166,3 +166,33 @@ test("browser import serves a picker and imports what it posts", async () => {
     delete process.env.WORKBUDDY_IMPORT_HOST
   }
 })
+
+test("a second browser import frees the port held by the first", async () => {
+  const port = String(36000 + Math.floor(Math.random() * 1000))
+  process.env.WORKBUDDY_IMPORT_PORT = port
+  process.env.WORKBUDDY_IMPORT_HOST = "127.0.0.1"
+  try {
+    const { client, saved } = mockClient()
+    const hooks = await WorkBuddyAIAuthPlugin({ client, magpie: {} })
+    const m = hooks.auth.methods.find((x) => x.label.endsWith("account file (browser)"))
+    const first = await m.authorize()
+    assert.match(first.url, new RegExp(`:${port}/import`))
+    const firstDone = first.callback()
+    const second = await m.authorize()
+    assert.match(second.url, new RegExp(`:${port}/import`))
+    assert.equal((await fetch(first.url)).status, 404)
+    assert.equal((await firstDone).type, "failed")
+    const done = second.callback()
+    const res = await fetch(second.url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ files: [{ name: "a.json", text: JSON.stringify(account) }] }),
+    })
+    assert.equal(res.status, 200)
+    assert.equal((await done).type, "success")
+    assert.equal(saved.length, 1)
+  } finally {
+    delete process.env.WORKBUDDY_IMPORT_PORT
+    delete process.env.WORKBUDDY_IMPORT_HOST
+  }
+})
