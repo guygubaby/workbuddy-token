@@ -1,0 +1,10 @@
+{
+  "version": "0.2.20",
+  "files": {
+    "index.mjs": "01d415568a83fe66caa6155fd693b8b80ab39015051285d97e9dd1fa5dd93723",
+    "opencode.mjs": "2219195390e62ca907145a12d442a1605f42a9f84320d6a6173167201e29eaa6",
+    "opencode2.mjs": "1548efa78c7f9054a4913017c1ab11638ff4cb6e37ac5c65ee9e069da652aa5a",
+    "package.json": "3c723c3224439ce85962bd180d06abd671a19be2c72fe22ee481ddb59b1deb1c"
+  },
+  "syncedAt": "2026-11-03T15:13:54.138Z"
+}

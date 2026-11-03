@@ -4,7 +4,9 @@
   "description": "WorkBuddy (CodeBuddy) auth plugin for OpenCode and magpie, with an account-file import sign-in",
   "type": "module",
   "main": "./opencode.mjs",
-  "exports": { ".": "./opencode2.mjs" },
+  "exports": {
+    ".": "./opencode2.mjs"
+  },
   "files": [
     "index.mjs",
     "opencode.mjs",
