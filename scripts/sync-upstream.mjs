@@ -99,13 +99,19 @@ const siteAnchor = '  "workbuddy-ai": {\n    id: "workbuddy-ai",\n    name: "Wor
 if (index.split(siteAnchor).length - 1 !== 1) fail("workbuddy-ai site: anchor not found in upstream index.mjs")
 index = index.replace(siteAnchor, '  "workbuddy-ai": {\n    id: "workbuddy-token",\n    name: "WorkBuddy Token",')
 
-// one plugin, under this fork's own name
+// the China build too, on an id of its own: a realm "cn" account has to go
+// to copilot.tencent.com, not www.workbuddy.ai
+const cnAnchor = '  workbuddy: {\n    id: "workbuddy",\n    name: "WorkBuddy",'
+if (index.split(cnAnchor).length - 1 !== 1) fail("workbuddy site: anchor not found in upstream index.mjs")
+index = index.replace(cnAnchor, '  workbuddy: {\n    id: "workbuddy-token-cn",\n    name: "WorkBuddy Token CN",')
+
+// two plugins, under this fork's own names
 const expAnchor = 'export const WorkBuddyAuthPlugin = makePlugin(SITES.workbuddy)\nexport const WorkBuddyAIAuthPlugin = makePlugin(SITES["workbuddy-ai"])'
 if (index.split(expAnchor).length - 1 !== 1) fail("plugin exports: anchor not found in upstream index.mjs")
-index = index.replace(expAnchor, 'export const WorkBuddyTokenPlugin = makePlugin(SITES["workbuddy-ai"])')
+index = index.replace(expAnchor, 'export const WorkBuddyTokenCNPlugin = makePlugin(SITES.workbuddy)\nexport const WorkBuddyTokenPlugin = makePlugin(SITES["workbuddy-ai"])')
 
 write("index.mjs", index)
-write("opencode.mjs", '// The package\'s one plugin, as magpie\'s host loads it: its own provider\n// id, so the official WorkBuddy plugin can be installed beside it.\nexport { WorkBuddyTokenPlugin } from "./index.mjs"\n')
+write("opencode.mjs", '// The package\'s two plugins, as magpie\'s host loads them: their own\n// provider ids, so the official WorkBuddy plugin can be installed beside\n// them.\nexport { WorkBuddyTokenCNPlugin, WorkBuddyTokenPlugin } from "./index.mjs"\n')
 write("opencode2.mjs", up["opencode2.mjs"])
 const pkg = JSON.parse(read("package.json").toString())
 pkg.version = upVersion

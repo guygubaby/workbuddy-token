@@ -1,13 +1,17 @@
 # workbuddy-token
 
-A WorkBuddy (CodeBuddy) account-file sign-in for magpie, on a provider id of
-its own: **`workbuddy-token`**. It can be installed beside the official
+A WorkBuddy (CodeBuddy) account-file sign-in for magpie, on provider ids of
+its own: **`workbuddy-token`** (the international build, www.workbuddy.ai) and
+**`workbuddy-token-cn`** (the China build, copilot.tencent.com). It can be
+installed beside the official
 [`@magpie-community/opencode-workbuddy-auth`](https://github.com/magpie-community/plugins/tree/main/packages/workbuddy)
 without either plugin replacing the other.
 
-It has one sign-in method: **WorkBuddy Token account file (browser)** — a page
-opens with the browser's own multi-select file picker. Choose one or more
-account JSON files, click 导入, and each file becomes its own account.
+One sign-in method on each: **account file (browser)** — a page opens with the
+browser's own multi-select file picker. Choose one or more account JSON files,
+click 导入, and each file becomes its own account. An account is routed to the
+right build by its `realm` (`cn` → WorkBuddy Token CN, `global` → WorkBuddy
+Token), whichever provider's sign-in was clicked.
 
 ## Install into magpie
 
@@ -21,8 +25,8 @@ Or in the app: **Plugins → Add a plugin** and pick this folder.
 
 ## Sign in
 
-1. Open **Providers → WorkBuddy Token**.
-2. Choose **Sign in**, then **WorkBuddy Token account file (browser)**.
+1. Open **Providers → WorkBuddy Token** (or **WorkBuddy Token CN**).
+2. Choose **Sign in**, then **account file (browser)**.
 3. In the page that opens, select one or more `.json` account files and click
    **导入**.
 4. The page shows how many accounts were imported; close it and return to
@@ -57,8 +61,8 @@ import. An account is named by `account.nickname`, and importing the same
 account again updates it instead of adding it twice.
 
 The sign-in is stored as an OAuth account: the access token is used as it is
-and renewed with the refresh token. CodeBuddy global exports
-(`www.codebuddy.ai`, `realm: "global"`) are what this plugin imports.
+and renewed with the refresh token. `realm: "cn"` files go to WorkBuddy Token
+CN; `realm: "global"` files (`www.codebuddy.ai`) go to WorkBuddy Token.
 
 ## Docker
 
@@ -96,11 +100,14 @@ node scripts/sync-upstream.mjs
 
 ## 中文说明
 
-这是 WorkBuddy（CodeBuddy）账号文件导入插件，使用独立的 provider id
-`workbuddy-token`，可以和官方 WorkBuddy 插件同时安装，不会互相冲突。
+这是 WorkBuddy（CodeBuddy）账号文件导入插件，使用独立的 provider id：
+`workbuddy-token`（国际版）和 `workbuddy-token-cn`（国内版），可以和官方
+WorkBuddy 插件同时安装，不会互相冲突。
 
-- 只保留一个登录方式：**WorkBuddy Token account file (browser)**。点开后
-  网页里直接多选 JSON 账号文件，点击“导入”即可，不需要输入路径。
+- 只保留一个登录方式：**account file (browser)**。点开后网页里直接多选
+  JSON 账号文件，点击“导入”即可，不需要输入路径。
+- 导入时会按文件里的 `realm` 自动分流：`cn` 进入 WorkBuddy Token CN，
+  `global` 进入 WorkBuddy Token；从哪个 provider 点登录都可以。
 - 每个文件导入为一个独立账号，按 `account.nickname` 命名；重复导入会更新
   原账号，不会重复添加。
 - 打开过但没完成的导入页，会在下一次导入开始时自动关闭并释放 3431 端口。

@@ -14,10 +14,11 @@ function accountOf(v) {
   const uid = one(v.account?.uid, v.uid, a.uid)
   const nickname = one(v.account?.nickname, v.nickname, v.account?.name, a.nickname)
   const domain = one(a.domain, v.domain)
+  const realm = one(a.realm, v.realm)
   const raw = Number(a.expiresAt ?? a.expires_at ?? a.expires ?? 0) || 0
   const expires = raw > 0 ? (raw < 1e12 ? raw * 1000 : raw) : 0
   if (!access) throw new Error("holds no accessToken")
-  return { access, refresh, expires, uid, nickname, domain }
+  return { access, refresh, expires, uid, nickname, domain, realm }
 }
 
 // importPath is a path as the user gave it: quotes and a leading ~ or
@@ -88,6 +89,18 @@ function importAccounts(input) {
   return { accounts, skipped }
 }
 
+// siteFor says which build an account belongs to: realm "cn", or a China
+// domain, is the China build (copilot.tencent.com); "global", or a
+// codebuddy.ai / workbuddy.ai domain, is the international one. An account
+// that says neither goes to the provider this sign-in started from.
+function siteFor(a, fallback) {
+  const realm = String(a?.realm ?? "").trim().toLowerCase()
+  const domain = String(a?.domain ?? "").trim().toLowerCase()
+  if (realm === "cn" || domain.endsWith("workbuddy.cn") || domain.endsWith("tencent.com")) return SITES.workbuddy
+  if (realm === "global" || domain.endsWith("codebuddy.ai") || domain.endsWith("workbuddy.ai")) return SITES["workbuddy-ai"]
+  return fallback
+}
+
 // saveAccounts keeps each imported account as its own magpie sign-in: the
 // first reaches magpie through the sign-in's own save, the rest through the
 // host's client.auth.set. The key is the uid's hash, so importing the same
@@ -97,7 +110,8 @@ async function saveAccounts(site, client, magpie, accounts, skipped) {
   let saved = 0
   if (!magpie) return { saved, skipped }
   for (const a of accounts) {
-    const key = site.id + "#" + createHash("sha1").update(a.uid || a.access).digest("hex").slice(0, 8)
+    const target = siteFor(a, site)
+    const key = target.id + "#" + createHash("sha1").update(a.uid || a.access).digest("hex").slice(0, 8)
     try {
       await client?.auth?.set?.({
         path: { id: key },
@@ -250,6 +264,7 @@ async function browserImport(site, client, magpie) {
       if (!accounts.length) throw new Error(`No account imported${skipped[0] ? ` — ${skipped[0].name}: ${skipped[0].why}` : ""}`)
       const { saved } = await saveAccounts(site, client, magpie, accounts, skipped)
       const a = accounts[0]
+      const target = siteFor(a, site)
       const result = {
         type: "success",
         access: a.access,
@@ -259,6 +274,7 @@ async function browserImport(site, client, magpie) {
         uid: a.uid,
         ...(a.domain ? { domain: a.domain } : {}),
         ...(a.nickname ? { nickname: a.nickname } : {}),
+        ...(target.id !== site.id ? { provider: target.id } : {}),
       }
       const said = `Imported ${saved} account${saved === 1 ? "" : "s"}${skipped.length ? `, skipped ${skipped.length}` : ""}`
       if (magpie && (accounts.length > 1 || skipped.length)) {

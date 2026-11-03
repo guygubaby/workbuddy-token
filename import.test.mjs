@@ -1,15 +1,15 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { WorkBuddyTokenPlugin } from "./index.mjs"
+import { WorkBuddyTokenCNPlugin, WorkBuddyTokenPlugin } from "./index.mjs"
 
-const account = (n) => ({
+const account = (n, realm = "global") => ({
   account: { uid: `test-uid-${n}`, nickname: `Test User ${n}` },
   auth: {
     accessToken: `test-access-${n}`,
     refreshToken: `test-refresh-${n}`,
     expiresAt: 1824998868,
-    domain: "www.codebuddy.ai",
-    realm: "global",
+    domain: realm === "cn" ? "" : "www.codebuddy.ai",
+    realm,
   },
 })
 
@@ -26,8 +26,8 @@ function mockClient() {
   }
 }
 
-async function browserMethod(client, magpie = {}) {
-  const hooks = await WorkBuddyTokenPlugin({ client, magpie })
+async function browserMethod(plugin, client, magpie = {}) {
+  const hooks = await plugin({ client, magpie })
   const m = hooks.auth.methods.find((x) => x.label.endsWith("account file (browser)"))
   assert.ok(m, "the browser account-file method is there")
   return { hooks, m }
@@ -36,12 +36,13 @@ async function browserMethod(client, magpie = {}) {
 const upload = (url, files) =>
   fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ files }) })
 
-test("declares its own provider, apart from the official plugin", async () => {
-  const { hooks } = await browserMethod(mockClient().client, {})
-  const cfg = { provider: {} }
-  await hooks.config(cfg)
-  assert.ok(cfg.provider["workbuddy-token"])
-  assert.equal(cfg.provider["workbuddy-token"].name, "WorkBuddy Token")
+test("declares the China and international providers, apart from the official plugin", async () => {
+  const ai = { provider: {} }
+  await (await browserMethod(WorkBuddyTokenPlugin, mockClient().client)).hooks.config(ai)
+  assert.equal(ai.provider["workbuddy-token"].name, "WorkBuddy Token")
+  const cn = { provider: {} }
+  await (await browserMethod(WorkBuddyTokenCNPlugin, mockClient().client)).hooks.config(cn)
+  assert.equal(cn.provider["workbuddy-token-cn"].name, "WorkBuddy Token CN")
 })
 
 test("serves a picker and imports every chosen file", async () => {
@@ -49,7 +50,7 @@ test("serves a picker and imports every chosen file", async () => {
   process.env.WORKBUDDY_IMPORT_HOST = "127.0.0.1"
   try {
     const { client, saved } = mockClient()
-    const { m } = await browserMethod(client, {})
+    const { m } = await browserMethod(WorkBuddyTokenPlugin, client)
     const r = await m.authorize()
     assert.equal(r.method, "auto")
     assert.match(r.url, /^http:\/\/127\.0\.0\.1:\d+\/import\?t=[0-9a-f]+$/)
@@ -68,9 +69,31 @@ test("serves a picker and imports every chosen file", async () => {
     assert.equal(out.accountId, "Test User 1")
     assert.equal(out.expires, 1824998868 * 1000)
     assert.equal(out.domain, "www.codebuddy.ai")
+    assert.equal(out.provider, undefined)
     assert.equal(saved.length, 2)
     assert.deepEqual(saved.map((s) => s.body.accountId), ["Test User 1", "Test User 2"])
     assert.ok(saved.every((s) => s.path.id.startsWith("workbuddy-token#") && s.body.type === "oauth"))
+  } finally {
+    delete process.env.WORKBUDDY_IMPORT_PORT
+    delete process.env.WORKBUDDY_IMPORT_HOST
+  }
+})
+
+test("a realm cn account goes to the China build", async () => {
+  process.env.WORKBUDDY_IMPORT_PORT = "0"
+  process.env.WORKBUDDY_IMPORT_HOST = "127.0.0.1"
+  try {
+    const { client, saved } = mockClient()
+    const { m } = await browserMethod(WorkBuddyTokenPlugin, client)
+    const r = await m.authorize()
+    const done = r.callback()
+    const res = await upload(r.url, [{ name: "cn.json", text: JSON.stringify(account(7, "cn")) }])
+    assert.equal(res.status, 200)
+    const out = await done
+    assert.equal(out.type, "success")
+    assert.equal(out.provider, "workbuddy-token-cn")
+    assert.equal(saved.length, 1)
+    assert.ok(saved[0].path.id.startsWith("workbuddy-token-cn#"))
   } finally {
     delete process.env.WORKBUDDY_IMPORT_PORT
     delete process.env.WORKBUDDY_IMPORT_HOST
@@ -82,7 +105,7 @@ test("a bad file is skipped and the rest import", async () => {
   process.env.WORKBUDDY_IMPORT_HOST = "127.0.0.1"
   try {
     const { client, saved, toasts } = mockClient()
-    const { m } = await browserMethod(client, {})
+    const { m } = await browserMethod(WorkBuddyTokenPlugin, client)
     const r = await m.authorize()
     const done = r.callback()
     const res = await upload(r.url, [
@@ -105,7 +128,7 @@ test("a file without an access token imports nothing", async () => {
   process.env.WORKBUDDY_IMPORT_HOST = "127.0.0.1"
   try {
     const { client } = mockClient()
-    const { m } = await browserMethod(client, {})
+    const { m } = await browserMethod(WorkBuddyTokenPlugin, client)
     const r = await m.authorize()
     const done = r.callback()
     const res = await upload(r.url, [{ name: "a.json", text: JSON.stringify({ auth: { refreshToken: "r" } }) }])
@@ -124,7 +147,7 @@ test("a second import frees the port held by the first", async () => {
   process.env.WORKBUDDY_IMPORT_HOST = "127.0.0.1"
   try {
     const { client, saved } = mockClient()
-    const { m } = await browserMethod(client, {})
+    const { m } = await browserMethod(WorkBuddyTokenPlugin, client)
     const first = await m.authorize()
     assert.match(first.url, new RegExp(`:${port}/import`))
     const firstDone = first.callback()
