@@ -10,7 +10,7 @@
 // those of its current desktop app (see SITES' app, cli and appName).
 
 import { createHash, randomBytes } from "node:crypto"
-import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs"
+import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { gzipSync } from "node:zlib"
@@ -3486,31 +3486,12 @@ function notFree(site, model, why) {
 }
 
 
-// parseAccountFile reads the account an account export holds: the JSON text
-// itself, or the path to its file. Both the {account, auth} shape
-// (CodeBuddy's export: account.uid/nickname, auth.accessToken/refreshToken/
-// expiresAt/domain) and a flat token object are taken, camelCase or
-// snake_case. Times are seconds in the export and kept as ms.
-function parseAccountFile(input) {
-  let text = typeof input === "string" ? input.trim() : ""
-  if (!text) throw new Error("Paste the account JSON or the path to its file")
-  if (!text.startsWith("{")) {
-    let file = text.replace(/^['"]|['"]$/g, "").trim()
-    if (file.startsWith("~/")) file = join(homedir(), file.slice(2))
-    if (file.startsWith("file://")) file = new URL(file).pathname
-    try {
-      text = readFileSync(file, "utf8")
-    } catch (e) {
-      throw new Error(`Can't read ${file}: ${e?.code === "ENOENT" ? "no such file" : e?.message ?? e}`)
-    }
-  }
-  let v
-  try {
-    v = JSON.parse(text)
-  } catch {
-    throw new Error("That isn't JSON, and isn't a path to a file that could be read")
-  }
-  if (!v || typeof v !== "object") throw new Error("That account file holds no object")
+// accountOf reads one account export: the {account:{uid,nickname}, auth:{
+// accessToken, refreshToken, expiresAt, domain}} shape CodeBuddy's export
+// tool writes, or a flat token object, camelCase or snake_case. Times are
+// seconds in the export and kept as ms.
+function accountOf(v) {
+  if (!v || typeof v !== "object") throw new Error("holds no JSON object")
   const a = v.auth && typeof v.auth === "object" ? v.auth : v
   const one = (...xs) => {
     for (const x of xs) if (typeof x === "string" && x.trim()) return x.trim()
@@ -3523,8 +3504,76 @@ function parseAccountFile(input) {
   const domain = one(a.domain, v.domain)
   const raw = Number(a.expiresAt ?? a.expires_at ?? a.expires ?? 0) || 0
   const expires = raw > 0 ? (raw < 1e12 ? raw * 1000 : raw) : 0
-  if (!access) throw new Error("That account file has no accessToken")
+  if (!access) throw new Error("holds no accessToken")
   return { access, refresh, expires, uid, nickname, domain }
+}
+
+// importPath is a path as the user gave it: quotes and a leading ~ or
+// file:// taken off.
+function importPath(p) {
+  let q = p.replace(/^['"]|['"]$/g, "").trim()
+  if (q.startsWith("~/")) q = join(homedir(), q.slice(2))
+  if (q.startsWith("file://")) q = new URL(q).pathname
+  return q
+}
+
+// importAccounts reads what the account-file sign-in was given: a folder
+// (every *.json in it, in name order), one or more paths on separate lines
+// or separated by ";", a JSON array, or one account's JSON. Each file is
+// read on its own: one that doesn't read is skipped with why, and the rest
+// still import.
+function importAccounts(input) {
+  const text = typeof input === "string" ? input.trim() : ""
+  if (!text) throw new Error("Paste the account JSON, or a folder or file path")
+  const refs = []
+  if (text.startsWith("{") || text.startsWith("[")) {
+    let v
+    try {
+      v = JSON.parse(text)
+    } catch {
+      throw new Error("That isn't JSON")
+    }
+    ;(Array.isArray(v) ? v : [v]).forEach((x, i) => refs.push({ name: `#${i + 1}`, value: x }))
+  } else {
+    for (const p of text.split(/\r?\n|;/).map((x) => x.trim()).filter(Boolean)) {
+      const q = importPath(p)
+      let st
+      try {
+        st = statSync(q)
+      } catch (e) {
+        refs.push({ name: q, why: e?.code === "ENOENT" ? "no such file" : e?.message ?? String(e) })
+        continue
+      }
+      if (!st.isDirectory()) {
+        refs.push({ name: q, file: q })
+        continue
+      }
+      let names
+      try {
+        names = readdirSync(q).filter((n) => n.toLowerCase().endsWith(".json")).sort()
+      } catch (e) {
+        refs.push({ name: q, why: e?.message ?? String(e) })
+        continue
+      }
+      if (!names.length) refs.push({ name: q, why: "hold no .json file" })
+      for (const n of names) refs.push({ name: join(q, n), file: join(q, n) })
+    }
+  }
+  const accounts = []
+  const skipped = []
+  for (const r of refs) {
+    if (r.why) {
+      skipped.push({ name: r.name, why: r.why })
+      continue
+    }
+    try {
+      const v = r.file ? JSON.parse(readFileSync(r.file, "utf8")) : r.value
+      accounts.push({ name: r.name, ...accountOf(v) })
+    } catch (e) {
+      skipped.push({ name: r.name, why: e?.message ?? String(e) })
+    }
+  }
+  return { accounts, skipped }
 }
 
 function makePlugin(site) {
@@ -4004,9 +4053,10 @@ function makePlugin(site) {
         },
         {
           // an account export imported as it is: the {account, auth} file
-          // an accounts tool writes, or the flat token object, pasted or
-          // given as a path. Kept as an oauth sign-in, so the access token
-          // is renewed with its refresh token like a browser sign-in's.
+          // an accounts tool writes, or the flat token object. A folder's
+          // *.json files, several paths, or a JSON array import together,
+          // each as its own account. Kept as an oauth sign-in, so access
+          // tokens renew with their refresh tokens like browser sign-ins.
           type: "api",
           keyless: true,
           label: `${site.name} account file`,
@@ -4014,17 +4064,58 @@ function makePlugin(site) {
             {
               type: "text",
               key: "file",
-              message: "Account JSON or its file path",
-              placeholder: '{"account":{…},"auth":{…}} or /path/to/account.json',
+              message: "Account JSON, or a folder or file path",
+              placeholder: "~/Downloads/accounts  ·  one path a line  ·  paste JSON",
             },
           ],
           authorize: async (inputs) => {
-            let a
+            let found
             try {
-              a = parseAccountFile(inputs?.file)
+              found = importAccounts(inputs?.file)
             } catch (e) {
               return { type: "failed", error: e?.message ?? String(e) }
             }
+            const { accounts, skipped } = found
+            if (!accounts.length) {
+              const why = skipped.slice(0, 3).map((s) => `${s.name}: ${s.why}`).join("; ")
+              return { type: "failed", error: `No account imported${why ? ` — ${why}` : ""}` }
+            }
+            let saved = 0
+            // magpie keeps each account of a provider under its own key: the
+            // first through the sign-in's own save, the rest written here.
+            // The key is the uid's hash so importing the same folder again
+            // updates its accounts instead of adding them twice.
+            if (magpie) {
+              for (const a of accounts) {
+                const key = site.id + "#" + createHash("sha1").update(a.uid || a.access).digest("hex").slice(0, 8)
+                try {
+                  await client?.auth?.set?.({
+                    path: { id: key },
+                    body: {
+                      type: "oauth",
+                      access: a.access,
+                      refresh: a.refresh,
+                      expires: a.expires,
+                      accountId: a.nickname || a.uid || site.name,
+                      uid: a.uid,
+                      ...(a.domain ? { domain: a.domain } : {}),
+                      ...(a.nickname ? { nickname: a.nickname } : {}),
+                    },
+                  })
+                  saved++
+                } catch (e) {
+                  skipped.push({ name: a.nickname || a.uid || a.name, why: e?.message ?? String(e) })
+                }
+              }
+              if (accounts.length > 1 || skipped.length) {
+                const said = `Imported ${saved} account${saved === 1 ? "" : "s"}` +
+                  (skipped.length ? `, skipped ${skipped.length}` : "")
+                try {
+                  await client?.tui?.showToast?.({ body: { title: site.name, message: said } })
+                } catch {}
+              }
+            }
+            const a = accounts[0]
             return {
               type: "success",
               access: a.access,
