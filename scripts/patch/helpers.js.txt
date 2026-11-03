@@ -1,0 +1,90 @@
+// accountOf reads one account export: the {account:{uid,nickname}, auth:{
+// accessToken, refreshToken, expiresAt, domain}} shape CodeBuddy's export
+// tool writes, or a flat token object, camelCase or snake_case. Times are
+// seconds in the export and kept as ms.
+function accountOf(v) {
+  if (!v || typeof v !== "object") throw new Error("holds no JSON object")
+  const a = v.auth && typeof v.auth === "object" ? v.auth : v
+  const one = (...xs) => {
+    for (const x of xs) if (typeof x === "string" && x.trim()) return x.trim()
+    return ""
+  }
+  const access = one(a.accessToken, a.access_token, a.access)
+  const refresh = one(a.refreshToken, a.refresh_token, a.refresh)
+  const uid = one(v.account?.uid, v.uid, a.uid)
+  const nickname = one(v.account?.nickname, v.nickname, v.account?.name, a.nickname)
+  const domain = one(a.domain, v.domain)
+  const raw = Number(a.expiresAt ?? a.expires_at ?? a.expires ?? 0) || 0
+  const expires = raw > 0 ? (raw < 1e12 ? raw * 1000 : raw) : 0
+  if (!access) throw new Error("holds no accessToken")
+  return { access, refresh, expires, uid, nickname, domain }
+}
+
+// importPath is a path as the user gave it: quotes and a leading ~ or
+// file:// taken off.
+function importPath(p) {
+  let q = p.replace(/^['"]|['"]$/g, "").trim()
+  if (q.startsWith("~/")) q = join(homedir(), q.slice(2))
+  if (q.startsWith("file://")) q = new URL(q).pathname
+  return q
+}
+
+// importAccounts reads what the account-file sign-in was given: a folder
+// (every *.json in it, in name order), one or more paths on separate lines
+// or separated by ";", a JSON array, or one account's JSON. Each file is
+// read on its own: one that doesn't read is skipped with why, and the rest
+// still import.
+function importAccounts(input) {
+  const text = typeof input === "string" ? input.trim() : ""
+  if (!text) throw new Error("Paste the account JSON, or a folder or file path")
+  const refs = []
+  if (text.startsWith("{") || text.startsWith("[")) {
+    let v
+    try {
+      v = JSON.parse(text)
+    } catch {
+      throw new Error("That isn't JSON")
+    }
+    ;(Array.isArray(v) ? v : [v]).forEach((x, i) => refs.push({ name: `#${i + 1}`, value: x }))
+  } else {
+    for (const p of text.split(/\r?\n|;/).map((x) => x.trim()).filter(Boolean)) {
+      const q = importPath(p)
+      let st
+      try {
+        st = statSync(q)
+      } catch (e) {
+        refs.push({ name: q, why: e?.code === "ENOENT" ? "no such file" : e?.message ?? String(e) })
+        continue
+      }
+      if (!st.isDirectory()) {
+        refs.push({ name: q, file: q })
+        continue
+      }
+      let names
+      try {
+        names = readdirSync(q).filter((n) => n.toLowerCase().endsWith(".json")).sort()
+      } catch (e) {
+        refs.push({ name: q, why: e?.message ?? String(e) })
+        continue
+      }
+      if (!names.length) refs.push({ name: q, why: "hold no .json file" })
+      for (const n of names) refs.push({ name: join(q, n), file: join(q, n) })
+    }
+  }
+  const accounts = []
+  const skipped = []
+  for (const r of refs) {
+    if (r.why) {
+      skipped.push({ name: r.name, why: r.why })
+      continue
+    }
+    try {
+      const v = r.file ? JSON.parse(readFileSync(r.file, "utf8")) : r.value
+      accounts.push({ name: r.name, ...accountOf(v) })
+    } catch (e) {
+      skipped.push({ name: r.name, why: e?.message ?? String(e) })
+    }
+  }
+  return { accounts, skipped }
+}
+

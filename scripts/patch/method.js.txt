@@ -1,0 +1,77 @@
+        {
+          // an account export imported as it is: the {account, auth} file
+          // an accounts tool writes, or the flat token object. A folder's
+          // *.json files, several paths, or a JSON array import together,
+          // each as its own account. Kept as an oauth sign-in, so access
+          // tokens renew with their refresh tokens like browser sign-ins.
+          type: "api",
+          keyless: true,
+          label: `${site.name} account file`,
+          prompts: [
+            {
+              type: "text",
+              key: "file",
+              message: "Account JSON, or a folder or file path",
+              placeholder: "~/Downloads/accounts  ·  one path a line  ·  paste JSON",
+            },
+          ],
+          authorize: async (inputs) => {
+            let found
+            try {
+              found = importAccounts(inputs?.file)
+            } catch (e) {
+              return { type: "failed", error: e?.message ?? String(e) }
+            }
+            const { accounts, skipped } = found
+            if (!accounts.length) {
+              const why = skipped.slice(0, 3).map((s) => `${s.name}: ${s.why}`).join("; ")
+              return { type: "failed", error: `No account imported${why ? ` — ${why}` : ""}` }
+            }
+            let saved = 0
+            // magpie keeps each account of a provider under its own key: the
+            // first through the sign-in's own save, the rest written here.
+            // The key is the uid's hash so importing the same folder again
+            // updates its accounts instead of adding them twice.
+            if (magpie) {
+              for (const a of accounts) {
+                const key = site.id + "#" + createHash("sha1").update(a.uid || a.access).digest("hex").slice(0, 8)
+                try {
+                  await client?.auth?.set?.({
+                    path: { id: key },
+                    body: {
+                      type: "oauth",
+                      access: a.access,
+                      refresh: a.refresh,
+                      expires: a.expires,
+                      accountId: a.nickname || a.uid || site.name,
+                      uid: a.uid,
+                      ...(a.domain ? { domain: a.domain } : {}),
+                      ...(a.nickname ? { nickname: a.nickname } : {}),
+                    },
+                  })
+                  saved++
+                } catch (e) {
+                  skipped.push({ name: a.nickname || a.uid || a.name, why: e?.message ?? String(e) })
+                }
+              }
+              if (accounts.length > 1 || skipped.length) {
+                const said = `Imported ${saved} account${saved === 1 ? "" : "s"}` +
+                  (skipped.length ? `, skipped ${skipped.length}` : "")
+                try {
+                  await client?.tui?.showToast?.({ body: { title: site.name, message: said } })
+                } catch {}
+              }
+            }
+            const a = accounts[0]
+            return {
+              type: "success",
+              access: a.access,
+              refresh: a.refresh,
+              expires: a.expires,
+              accountId: a.nickname || a.uid || site.name,
+              uid: a.uid,
+              ...(a.domain ? { domain: a.domain } : {}),
+              ...(a.nickname ? { nickname: a.nickname } : {}),
+            }
+          },
+        },
