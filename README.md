@@ -1,16 +1,13 @@
 # workbuddy-token
 
-A fork of
+A WorkBuddy (CodeBuddy) account-file sign-in for magpie, on a provider id of
+its own: **`workbuddy-token`**. It can be installed beside the official
 [`@magpie-community/opencode-workbuddy-auth`](https://github.com/magpie-community/plugins/tree/main/packages/workbuddy)
-that adds two sign-in methods:
+without either plugin replacing the other.
 
-- **WorkBuddy AI account file** — paste the account JSON, a file path, a
-  folder path, several paths, or a JSON array.
-- **WorkBuddy AI account file (browser)** — a page opens with a real file
-  picker; choose one or more JSON files and they import together.
-
-Both skip the vendor's browser sign-in, the desktop app's sign-in and API
-keys.
+It has one sign-in method: **WorkBuddy Token account file (browser)** — a page
+opens with the browser's own multi-select file picker. Choose one or more
+account JSON files, click 导入, and each file becomes its own account.
 
 ## Install into magpie
 
@@ -22,47 +19,20 @@ magpie plugin add /path/to/workbuddy-token
 
 Or in the app: **Plugins → Add a plugin** and pick this folder.
 
-## Sign in from an account file
+## Sign in
 
-1. Open **Providers → WorkBuddy AI** (the international build).
-2. Choose **Sign in**, then **WorkBuddy AI account file**.
-3. Paste the JSON below, or the path to the file (a path with spaces is fine).
-
-To import many at once, give the path of a folder: every `.json` inside it is
-imported as its own account. Several paths also work, one per line or
-separated by `;`, as does a JSON array of accounts. A file that can't be read
-is skipped (the toast says how many), and importing the same folder again
-updates its accounts instead of adding them twice.
-
-If magpie runs in Docker, the path is the one inside the container: copy the
-folder into the mounted config volume (for the Docker setup in this repo's
-notes, `/root/devops/magpie/config/incoming/` on the host is
-`/config/incoming/` in the container).
-
-## Sign in with the browser file picker
-
-1. Open **Providers → WorkBuddy AI → Sign in → WorkBuddy AI account file
-   (browser)**.
-2. A page opens with a file picker. Choose one or more `.json` account files.
-3. Click **导入**. The page says how many were imported; close it and return
-   to magpie.
+1. Open **Providers → WorkBuddy Token**.
+2. Choose **Sign in**, then **WorkBuddy Token account file (browser)**.
+3. In the page that opens, select one or more `.json` account files and click
+   **导入**.
+4. The page shows how many accounts were imported; close it and return to
+   magpie.
 
 The page is served by the plugin for that one sign-in only: a random token in
-the URL, closed after the upload or after five minutes. Nothing is typed.
+the URL, closed after the upload or after five minutes. Starting another
+import closes the previous page and frees the port.
 
-For magpie in Docker, publish the import port and tell the plugin the address
-your browser reaches it at:
-
-```yaml
-ports:
-  - "3431:3431"
-environment:
-  WORKBUDDY_IMPORT_HOST: 203.0.113.10   # the host's public address
-```
-
-`WORKBUDDY_IMPORT_PORT` changes the port (3431). The address is plain HTTP,
-as the rest of the browser UI is; on a public host, allow only the port you
-need and prefer HTTPS in front of it.
+## Account file
 
 ```json
 {
@@ -82,56 +52,60 @@ need and prefer HTTPS in front of it.
 
 A flat token object also works (`accessToken`/`refreshToken`/`expiresAt`, or
 `access_token`/`refresh_token`/`expires_at`). `expiresAt` may be seconds or
-milliseconds.
+milliseconds. A file that can't be read is skipped and counted; the rest
+import. An account is named by `account.nickname`, and importing the same
+account again updates it instead of adding it twice.
 
-The sign-in is stored as an OAuth account: the access token is used as it is,
-and renewed with the refresh token like a browser sign-in's. The account is
-named by `account.nickname`.
+The sign-in is stored as an OAuth account: the access token is used as it is
+and renewed with the refresh token. CodeBuddy global exports
+(`www.codebuddy.ai`, `realm: "global"`) are what this plugin imports.
 
-CodeBuddy global exports (`www.codebuddy.ai`, `realm: "global"`) belong to
-**WorkBuddy AI**. China-build exports belong to **WorkBuddy**.
+## Docker
 
-## What the upstream plugin does
+The plugin's page is served on port 3431. Publish it and name the address the
+browser reaches it at:
 
-Everything else is unchanged from
-[the upstream package](https://github.com/magpie-community/plugins/tree/main/packages/workbuddy):
-browser sign-in, desktop sign-in, API keys, model lists, usage, check-in,
-routing groups, free-model filtering and the rest.
+```yaml
+ports:
+  - "3431:3431"
+environment:
+  WORKBUDDY_IMPORT_HOST: 203.0.113.10   # the host's public address
+```
+
+`WORKBUDDY_IMPORT_PORT` changes the port (3431). The page is plain HTTP, as
+the rest of the browser UI is; on a public host, prefer HTTPS in front of it.
 
 ## Security
 
 An account file holds a long-lived refresh token. Keep exports out of the
 repository, chat and issue trackers; magpie keeps them in its own
-`plugin-auth.json`.
+`plugin-auth.json`. The import page carries a one-time token and exists only
+for the sign-in that opened it.
 
 ## Updating from upstream
 
-Replace `index.mjs`, `opencode.mjs` and `opencode2.mjs` with the upstream
-files, then re-apply the `parseAccountFile` helper and the
-`account file` entries in `auth.methods` (both live in `index.mjs`).
+The plugin's request, model, usage and check-in logic is the official
+package's. `scripts/sync-upstream.mjs` fetches the newest upstream files,
+re-applies this fork's patch (`scripts/patch/`), renames the provider and
+keeps only the account-file sign-in, then runs the tests. It commits and
+pushes only when they pass.
+
+```sh
+node scripts/sync-upstream.mjs
+```
 
 ## 中文说明
 
-这是上游 `opencode-workbuddy-auth` 的修改版，只加了一个登录方式：
-**WorkBuddy AI account file**。
+这是 WorkBuddy（CodeBuddy）账号文件导入插件，使用独立的 provider id
+`workbuddy-token`，可以和官方 WorkBuddy 插件同时安装，不会互相冲突。
 
-- 安装：`magpie plugin add ~/i/workbuddy-token`，或在 magpie 的
-  Plugins → Add a plugin 里选择这个目录。
-- 登录方式一：Providers → WorkBuddy AI → Sign in →
-  **WorkBuddy AI account file**，粘贴账号 JSON 内容或文件路径即可。
-- 登录方式二：**WorkBuddy AI account file (browser)** 会打开一个网页，
-  直接多选本机 JSON 文件，点“导入”即可，不需要输入任何路径。
-- Docker 里的 magpie 要用网页选择文件，需要映射 3431 端口并设置
+- 只保留一个登录方式：**WorkBuddy Token account file (browser)**。点开后
+  网页里直接多选 JSON 账号文件，点击“导入”即可，不需要输入路径。
+- 每个文件导入为一个独立账号，按 `account.nickname` 命名；重复导入会更新
+  原账号，不会重复添加。
+- 打开过但没完成的导入页，会在下一次导入开始时自动关闭并释放 3431 端口。
+- Docker 里使用：映射 `3431:3431`，并设置
   `WORKBUDDY_IMPORT_HOST` 为浏览器访问的服务器地址。
-- 批量导入：填文件夹路径会导入里面所有 `.json`（每个文件一个账号）；
-  也可以每行一个路径、用 `;` 分隔多个路径，或粘贴 JSON 数组。无法读取的
-  文件会跳过，并在提示里显示数量；重复导入同一个文件夹不会重复添加账号。
-- 如果 magpie 跑在 Docker 里，路径要用容器内的路径：把文件夹放到宿主的
-  `/root/devops/magpie/config/incoming/`，在容器里就是 `/config/incoming/`。
-- 文件里的 `expiresAt` 支持秒或毫秒；domain 为 `www.codebuddy.ai` 的
-  global 账号请导入到 WorkBuddy AI，不要导入到国内版 WorkBuddy。
-- 账号会以 `account.nickname` 命名，access token 到期后自动用
-  refresh token 续期。
 - 账号文件含长期 refresh token，不要提交到仓库或发给别人。
 
 ## License

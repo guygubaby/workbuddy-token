@@ -1,7 +1,7 @@
 {
   "name": "opencode-workbuddy-token-import",
   "version": "0.2.20",
-  "description": "WorkBuddy (CodeBuddy) auth plugin for OpenCode and magpie, with an account-file import sign-in",
+  "description": "WorkBuddy (CodeBuddy) account-file sign-in for magpie, on its own workbuddy-token provider",
   "type": "module",
   "main": "./opencode.mjs",
   "exports": {
@@ -19,7 +19,8 @@
     "opencode-plugin",
     "workbuddy",
     "codebuddy",
-    "magpie"
+    "magpie",
+    "account-import"
   ],
   "license": "MIT",
   "repository": {

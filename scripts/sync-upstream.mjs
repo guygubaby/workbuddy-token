@@ -13,6 +13,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const UPSTREAM = "https://raw.githubusercontent.com/magpie-community/plugins/main/packages/workbuddy"
 const API = "https://api.github.com/repos/magpie-community/plugins/contents/packages/workbuddy"
 const dry = process.argv.includes("--dry-run")
+const repatch = process.argv.includes("--repatch")
 const sha = (s) => createHash("sha256").update(s).digest("hex")
 const read = (p) => readFileSync(join(root, p))
 const write = (p, s) => writeFileSync(join(root, p), s)
@@ -65,7 +66,7 @@ const upVersion = JSON.parse(up["package.json"]).version
 const hashes = Object.fromEntries(NAMES.map((n) => [n, sha(up[n])]))
 const statePath = join(root, "upstream.json")
 const was = existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : null
-if (was && was.version === upVersion && NAMES.every((n) => was.files?.[n] === hashes[n])) {
+if (!repatch && was && was.version === upVersion && NAMES.every((n) => was.files?.[n] === hashes[n])) {
   console.log(`up to date: ${upVersion}`)
   process.exit(0)
 }
@@ -83,12 +84,28 @@ const method = readFileSync(join(root, "scripts/patch/method.js.txt"), "utf8")
 const factory = "function makePlugin(site) {"
 once(index, factory, "makePlugin")
 index = index.replace(factory, helpers + factory)
-const tail = "      ],\n    },\n  }\n  }\n}"
-const at = once(index, tail, "methods array tail")
-index = index.slice(0, at) + method + index.slice(at)
+
+// only the browser import stays: the whole methods array upstream ships
+// (browser sign-in, desktop, API key) becomes this fork's one method.
+const mstart = index.indexOf("      methods: [")
+if (mstart < 0) fail("methods array: not found in upstream index.mjs")
+const close = index.indexOf("\n      ],", mstart)
+if (close < 0) fail("methods array: tail not found in upstream index.mjs")
+index = index.slice(0, mstart) + "      methods: [\n" + method + index.slice(close + 1)
+
+// a provider id of its own, so the official plugin can be installed beside
+// this one instead of conflicting with it
+const siteAnchor = '  "workbuddy-ai": {\n    id: "workbuddy-ai",\n    name: "WorkBuddy AI",'
+if (index.split(siteAnchor).length - 1 !== 1) fail("workbuddy-ai site: anchor not found in upstream index.mjs")
+index = index.replace(siteAnchor, '  "workbuddy-ai": {\n    id: "workbuddy-token",\n    name: "WorkBuddy Token",')
+
+// one plugin, under this fork's own name
+const expAnchor = 'export const WorkBuddyAuthPlugin = makePlugin(SITES.workbuddy)\nexport const WorkBuddyAIAuthPlugin = makePlugin(SITES["workbuddy-ai"])'
+if (index.split(expAnchor).length - 1 !== 1) fail("plugin exports: anchor not found in upstream index.mjs")
+index = index.replace(expAnchor, 'export const WorkBuddyTokenPlugin = makePlugin(SITES["workbuddy-ai"])')
 
 write("index.mjs", index)
-write("opencode.mjs", up["opencode.mjs"])
+write("opencode.mjs", '// The package\'s one plugin, as magpie\'s host loads it: its own provider\n// id, so the official WorkBuddy plugin can be installed beside it.\nexport { WorkBuddyTokenPlugin } from "./index.mjs"\n')
 write("opencode2.mjs", up["opencode2.mjs"])
 const pkg = JSON.parse(read("package.json").toString())
 pkg.version = upVersion
