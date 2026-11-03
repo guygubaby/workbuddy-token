@@ -86,8 +86,8 @@ const SITES = {
     messages: true,
   },
   "workbuddy-ai": {
-    id: "workbuddy-ai",
-    name: "WorkBuddy AI",
+    id: "workbuddy-token",
+    name: "WorkBuddy Token",
     endpoint: "https://www.workbuddy.ai",
     authID: "workbuddy-desktop-ai",
     platform: "workbuddy-ai",
@@ -3704,6 +3704,17 @@ async function browserImport(site, client, magpie) {
     if (req.method === "GET") return say(200, IMPORT_PAGE, "text/html; charset=utf-8")
     if (req.method !== "POST") return say(405, "method not allowed")
     if (state.settled) return say(409, "this import is already done")
+    // the sign-in finishes only after this answer has left: its callback
+    // closes the server, and closing it under the response cut the socket
+    const answer = (result) => {
+      const done = () => {
+        if (state.settled) return
+        state.settled = true
+        state.settle(result)
+      }
+      res.once("finish", done)
+      res.once("close", done)
+    }
     let body = ""
     try {
       for await (const chunk of req) {
@@ -3726,8 +3737,7 @@ async function browserImport(site, client, magpie) {
       if (!accounts.length) throw new Error(`No account imported${skipped[0] ? ` — ${skipped[0].name}: ${skipped[0].why}` : ""}`)
       const { saved } = await saveAccounts(site, client, magpie, accounts, skipped)
       const a = accounts[0]
-      state.settled = true
-      state.settle({
+      const result = {
         type: "success",
         access: a.access,
         refresh: a.refresh,
@@ -3736,17 +3746,17 @@ async function browserImport(site, client, magpie) {
         uid: a.uid,
         ...(a.domain ? { domain: a.domain } : {}),
         ...(a.nickname ? { nickname: a.nickname } : {}),
-      })
+      }
       const said = `Imported ${saved} account${saved === 1 ? "" : "s"}${skipped.length ? `, skipped ${skipped.length}` : ""}`
       if (magpie && (accounts.length > 1 || skipped.length)) {
         try {
           await client?.tui?.showToast?.({ body: { title: site.name, message: said } })
         } catch {}
       }
+      answer(result)
       return say(200, `${said}\n\n可以关闭此页面，回到 magpie。`)
     } catch (e) {
-      state.settled = true
-      state.settle({ type: "failed", error: e?.message ?? String(e) })
+      answer({ type: "failed", error: e?.message ?? String(e) })
       return say(400, `没有导入账号：${e?.message ?? e}`)
     }
   })
@@ -4246,77 +4256,10 @@ function makePlugin(site) {
       },
       methods: [
         {
-          type: "oauth",
-          label: `${site.name} account (browser)`,
-          authorize: () => browserSignIn(site),
-        },
-        {
-          type: "oauth",
-          label: `${site.name} desktop's sign-in`,
-          authorize: async () => desktopSignIn(site),
-        },
-        {
-          // a key made at site.keys, sent as WorkBuddy's CLI sends one
-          // (keyAccount)
-          type: "api",
-          label: `${site.name} API key`,
-          placeholder: `from ${site.keys.replace(/^https:\/\//, "")}`,
-        },
-        {
-          // an account export imported as it is: the {account, auth} file
-          // an accounts tool writes, or the flat token object. A folder's
-          // *.json files, several paths, or a JSON array import together,
-          // each as its own account. Kept as an oauth sign-in, so access
-          // tokens renew with their refresh tokens like browser sign-ins.
-          type: "api",
-          keyless: true,
-          label: `${site.name} account file`,
-          prompts: [
-            {
-              type: "text",
-              key: "file",
-              message: "Account JSON, or a folder or file path",
-              placeholder: "~/Downloads/accounts  ·  one path a line  ·  paste JSON",
-            },
-          ],
-          authorize: async (inputs) => {
-            let found
-            try {
-              found = importAccounts(inputs?.file)
-            } catch (e) {
-              return { type: "failed", error: e?.message ?? String(e) }
-            }
-            const { accounts, skipped } = found
-            if (!accounts.length) {
-              const why = skipped.slice(0, 3).map((s) => `${s.name}: ${s.why}`).join("; ")
-              return { type: "failed", error: `No account imported${why ? ` — ${why}` : ""}` }
-            }
-            const { saved } = await saveAccounts(site, client, magpie, accounts, skipped)
-            if (magpie && (accounts.length > 1 || skipped.length)) {
-              const said = `Imported ${saved} account${saved === 1 ? "" : "s"}` +
-                (skipped.length ? `, skipped ${skipped.length}` : "")
-              try {
-                await client?.tui?.showToast?.({ body: { title: site.name, message: said } })
-              } catch {}
-            }
-            const a = accounts[0]
-            return {
-              type: "success",
-              access: a.access,
-              refresh: a.refresh,
-              expires: a.expires,
-              accountId: a.nickname || a.uid || site.name,
-              uid: a.uid,
-              ...(a.domain ? { domain: a.domain } : {}),
-              ...(a.nickname ? { nickname: a.nickname } : {}),
-            }
-          },
-        },
-        {
-          // the same import with a browser file picker: magpie has no file
-          // picker for a plugin's sign-in, so this opens a page the plugin
-          // serves for this one sign-in, and the files chosen there come
-          // back to it. Several files import together, as above.
+          // the only sign-in this fork keeps: a page the plugin serves for
+          // this one sign-in, with the browser's own file picker. The files
+          // chosen there are imported as accounts, each with its own
+          // refresh token.
           type: "oauth",
           label: `${site.name} account file (browser)`,
           authorize: () => browserImport(site, client, magpie),
@@ -4436,8 +4379,7 @@ async function explained(res) {
   return new Response(JSON.stringify({ error: { message: msg, type, code: errCode } }), { status: res.status, statusText: res.statusText, headers })
 }
 
-export const WorkBuddyAuthPlugin = makePlugin(SITES.workbuddy)
-export const WorkBuddyAIAuthPlugin = makePlugin(SITES["workbuddy-ai"])
+export const WorkBuddyTokenPlugin = makePlugin(SITES["workbuddy-ai"])
 
 // for tests
 export const _internal = { planCodes, listedExtra, idFor, OFF_TAKEN, replyAfterToolsOn, withDefaultEffort, SMALL_BUDGET, defaultEffortOf, gzipped, FREE_ONLY, PRICE_TTL, keyAccount, remoteConfig, cycleOf, typeUnions, systemAsUser, systemKey, DEFAULT_SYSTEM, EDGE_READS, fitShape, replyAfterTools, AFTER_TOOLS_REFUSED, enterpriseUsageOf, accountName, notDesktop, textOnly, runsOutOf, packagesOf, endOf, enterpriseHeaders, enterpriseOf, liveModels, browserSignIn, withSystem, asReasoning, normalizeToolChoice, fitTools, fitted, renamed, unsaid, FILTER_SAYS, unflagged, usageOf, desktopHeld, explained, REFUSED_HINT, RESTRICTED_HINT, EXHAUSTED_HINT, REFUSED_DOC, commaPaused, commaPausedOn, opened, freeCredits, creditsOf, priceOf, fresh, SITES, renewing, renewed, SESSION, attend, scopeOf, turnKey, conversationKey, signatureOf, isMessages, withoutUnsigned, withoutSignedThinking, prepared, answeredBefore, nativeOf, modelOf, configModels, freeWindowOf, tokensShort, freeWindowRows, freeWindowLedger, readLedgerTail, pinned, pinning, rowTime, rowAccount, ofAccount, windowOffset, windowReset, CN_ESTIMATED_WINDOWS, FREE_WINDOW_AI, FREE_WINDOW_SPAN, FREE_WINDOW_GAP, FREE_WINDOW_LEAD, checkinOf, API_MESSAGES: NPM_MESSAGES, API_CHAT: NPM }
