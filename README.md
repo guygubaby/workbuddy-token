@@ -98,6 +98,9 @@ pushes only when they pass.
 node scripts/sync-upstream.mjs
 ```
 
+It also runs hourly in GitHub Actions (`.github/workflows/sync-upstream.yml`);
+run it on demand from the Actions tab via `workflow_dispatch`.
+
 ## 中文说明
 
 这是 WorkBuddy（CodeBuddy）账号文件导入插件，使用独立的 provider id：

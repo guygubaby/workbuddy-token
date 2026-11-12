@@ -32,11 +32,15 @@ if (git("status", "--porcelain").trim()) fail("working tree isn't clean; commit 
 
 // get fetches one upstream file, retrying a dropped connection: the sync
 // runs unattended, and this network drops raw.githubusercontent now and then.
+const headers = { "user-agent": "workbuddy-token-sync", accept: "application/vnd.github+json" }
+// GitHub Actions hands over GITHUB_TOKEN; using it keeps the API listing off
+// the shared runner IP's unauthenticated rate limit.
+if (process.env.GITHUB_TOKEN) headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`
 async function get(url, what) {
   for (let i = 0; ; i++) {
     try {
       const res = await fetch(url, {
-        headers: { "user-agent": "workbuddy-token-sync", accept: "application/vnd.github+json" },
+        headers,
         signal: AbortSignal.timeout(30000),
       })
       if (res.ok) return await res.text()
