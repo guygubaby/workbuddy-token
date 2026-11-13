@@ -1,6 +1,6 @@
 {
   "name": "opencode-workbuddy-token-import",
-  "version": "0.2.32",
+  "version": "0.2.34",
   "description": "WorkBuddy (CodeBuddy) account-file sign-in for magpie, on its own workbuddy-token provider",
   "type": "module",
   "main": "./opencode.mjs",
